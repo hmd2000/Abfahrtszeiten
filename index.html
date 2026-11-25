@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1f6f5c">
+<title>Abfahrtszeit</title>
+<style>
+/* Layout: eine schmale Spalte, oben Route und Tag, darunter je ein Block für Hinweg und Rückweg */
+:root {
+  --bg: #f5f7f6; --surface: #ffffff; --fg: #1b2420; --muted: #5d6b65; --line: #dce3e0;
+  --accent: #1f6f5c; --accent-fg: #ffffff; --good: #2e8b57; --mid: #c9a227; --bad: #c4553d;
+  --bar: #cfdcd7; --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121715; --surface: #1b2220; --fg: #e6ece9; --muted: #95a39d; --line: #2c3633;
+    --accent: #4fb89a; --accent-fg: #0d1311; --good: #5cc28a; --mid: #d9b84a; --bad: #e07a63; --bar: #34423e; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 var(--font);
+  padding: env(safe-area-inset-top, 0px) max(16px, env(safe-area-inset-right, 0px)) 32px max(16px, env(safe-area-inset-left, 0px)); }
+main { max-width: 760px; margin: 0 auto; display: grid; gap: 16px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 16px; }
+h1 { font-size: 1.35rem; margin: 0; }
+h2 { font-size: 1.05rem; margin: 0; }
+h3 { font-size: .95rem; margin: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grow { flex: 1 1 160px; min-width: 0; }
+label { display: grid; gap: 4px; font-size: .85rem; color: var(--muted); }
+input, select, button { font: inherit; }
+input, select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); width: 100%; min-width: 0; }
+button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+button.link { border: 0; background: none; color: var(--accent); padding: 4px 0; text-decoration: underline; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .5; cursor: default; }
+.muted { color: var(--muted); font-size: .85rem; }
+.pill { display: inline-block; font-size: .75rem; padding: 2px 8px; border-radius: 99px; background: var(--bar); color: var(--fg); }
+.pill.demo { background: var(--mid); color: #1b1b1b; }
+.err { color: var(--bad); font-size: .9rem; white-space: pre-wrap; }
+.best { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.best > div { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 2px; }
+.best > div.top { border-color: var(--good); border-width: 2px; }
+.best .t { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bars { display: grid; gap: 3px; font-variant-numeric: tabular-nums; }
+.bar { display: grid; grid-template-columns: 3.2rem 1fr 4.6rem; gap: 8px; align-items: center; font-size: .85rem; }
+.bar .track { height: 14px; background: transparent; border-radius: 4px; overflow: hidden; }
+.bar .fill { height: 100%; border-radius: 4px; background: var(--bar); }
+.bar.isbest .fill { background: var(--good); }
+.bar.hi .fill { background: var(--bad); }
+.bar.midv .fill { background: var(--mid); }
+.bar .v { text-align: right; }
+.bar.skip { color: var(--muted); }
+details summary { cursor: pointer; font-weight: 600; }
+.routes { display: grid; gap: 8px; }
+.route-item { display: flex; gap: 8px; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; flex-wrap: wrap; }
+.route-item .name { font-weight: 600; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+@media (max-width: 480px) { .split { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Abfahrtszeit</h1>
+    <span id="modePill" class="pill"></span>
+  </header>
+
+  <section class="card" id="planCard">
+    <div class="row">
+      <label class="grow">Route
+        <select id="routeSelect"></select>
+      </label>
+      <label style="flex:0 1 170px">Tag
+        <input type="date" id="dayInput">
+      </label>
+    </div>
+    <div class="row">
+      <button class="primary" id="runBtn">Beste Abfahrtszeiten berechnen</button>
+      <span class="muted" id="runInfo"></span>
+    </div>
+    <div id="runErr" class="err" hidden></div>
+  </section>
+
+  <section class="card" id="outCard" hidden>
+    <div class="row" style="justify-content:space-between">
+      <h2 id="outTitle">Hinweg (morgens)</h2>
+      <span class="muted" id="outMeta"></span>
+    </div>
+    <div class="best" id="outBest"></div>
+    <div class="bars" id="outBars"></div>
+  </section>
+
+  <section class="card" id="backCard" hidden>
+    <div class="row" style="justify-content:space-between">
+      <h2 id="backTitle">Rückweg (Feierabend)</h2>
+      <span class="muted" id="backMeta"></span>
+    </div>
+    <div class="best" id="backBest"></div>
+    <div class="bars" id="backBars"></div>
+  </section>
+
+  <section class="card">
+    <details id="routesDetails">
+      <summary>Routen verwalten</summary>
+      <div style="display:grid; gap:12px; margin-top:12px">
+        <div class="routes" id="routeList"></div>
+        <form id="routeForm" style="display:grid; gap:10px">
+          <h3 id="routeFormTitle">Neue Route</h3>
+          <input type="hidden" id="rId">
+          <label>Name <input id="rName" required placeholder="z. B. Arbeitsweg"></label>
+          <label>Start (z. B. Zuhause) <input id="rFrom" required placeholder="Straße Hausnummer, PLZ Ort"></label>
+          <label>Ziel (z. B. Arbeit) <input id="rTo" required placeholder="Straße Hausnummer, PLZ Ort"></label>
+          <div class="split">
+            <label>Hinweg: frühestens los <input type="time" id="rMorStart" value="06:00"></label>
+            <label>Hinweg: spätestens los <input type="time" id="rMorEnd" value="09:30"></label>
+          </div>
+          <label class="row" style="gap:6px; color:var(--fg)"><input type="checkbox" id="rBack" checked style="width:auto"> Rückweg (Feierabend) auch berechnen</label>
+          <div class="split">
+            <label>Rückweg: frühestens los <input type="time" id="rEveStart" value="15:00"></label>
+            <label>Rückweg: spätestens los <input type="time" id="rEveEnd" value="19:00"></label>
+          </div>
+          <label>Abstand zwischen geprüften Abfahrtszeiten
+            <select id="rStep">
+              <option value="10">10 Minuten</option>
+              <option value="15" selected>15 Minuten</option>
+              <option value="20">20 Minuten</option>
+              <option value="30">30 Minuten</option>
+            </select>
+          </label>
+          <div class="row">
+            <button class="primary" type="submit">Route speichern</button>
+            <button type="button" id="rCancel" hidden>Abbrechen</button>
+          </div>
+        </form>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <details id="settingsDetails">
+      <summary>Einstellungen und Verkehrsdaten</summary>
+      <div style="display:grid; gap:12px; margin-top:12px">
+        <label>Datenquelle
+          <select id="sProvider">
+            <option value="tomtom">TomTom (kostenlos, empfohlen)</option>
+            <option value="demo">Demo (simulierte Daten, kein Schlüssel nötig)</option>
+            <option value="google">Google Maps (braucht Kreditkarte im Google-Konto)</option>
+          </select>
+        </label>
+        <label id="sKeyWrap">API-Schlüssel
+          <input id="sKey" type="password" autocomplete="off" placeholder="Wird nur in diesem Browser gespeichert">
+        </label>
+        <p class="muted" id="sKeyHint" style="margin:0"></p>
+        <div class="row">
+          <button class="primary" id="sSave">Einstellungen speichern</button>
+          <button id="sClearCache">Zwischenspeicher leeren</button>
+        </div>
+        <p class="muted" id="usageInfo" style="margin:0"></p>
+      </div>
+    </details>
+  </section>
+
+  <p class="muted" style="margin:0">Die Zeiten für die Zukunft sind Prognosen der Datenquelle aus aktuellem und historischem Verkehr. Je näher die Abfahrt, desto genauer. Ergebnisse werden 30 Minuten zwischengespeichert, um Abfragen zu sparen.</p>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+  const K = { settings: 'abf.settings', routes: 'abf.routes', cache: 'abf.cache', usage: 'abf.usage', geo: 'abf.geo', last: 'abf.lastRoute' };
+  const CACHE_MS = 30 * 60 * 1000;
+
+  let settings = store.get(K.settings, { provider: 'demo', keys: {} });
+  let routes = store.get(K.routes, null);
+  if (!routes || !routes.length) {
+    routes = [{ id: 'r' + Date.now(), name: 'Arbeitsweg (Beispiel)', from: 'Marienplatz 1, 80331 München', to: 'Parkring 1, 85748 Garching bei München',
+      morStart: '06:00', morEnd: '09:30', back: true, eveStart: '15:00', eveEnd: '19:00', step: 15 }];
+    store.set(K.routes, routes);
+  }
+
+  // ---------- Hilfsfunktionen ----------
+  const pad = (n) => String(n).padStart(2, '0');
+  const hm = (d) => pad(d.getHours()) + ':' + pad(d.getMinutes());
+  const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const LIMITS = { tomtom: 19000, google: 4800 }; // Sicherheitsgrenze knapp unter dem Gratiskontingent
+  function usageOf(p) { return store.get(K.usage, {})[monthKey() + ':' + p] || 0; }
+  const fmtMin = (s) => Math.round(s / 60) + ' min';
+  const dateKey = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  function parseDay(str) { const [y, m, d] = str.split('-').map(Number); return new Date(y, m - 1, d); }
+  function atTime(day, t) { const [h, m] = t.split(':').map(Number); const d = new Date(day); d.setHours(h, m, 0, 0); return d; }
+  function slots(day, start, end, step) {
+    const out = []; let t = atTime(day, start); const e = atTime(day, end);
+    while (t <= e) { out.push(new Date(t)); t = new Date(t.getTime() + step * 60000); }
+    return out;
+  }
+  function defaultDay(route) {
+    const now = new Date(); let d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const lastToday = atTime(d, route && route.back ? route.eveEnd : (route ? route.morEnd : '19:00'));
+    if (now > lastToday || d.getDay() === 0 || d.getDay() === 6) {
+      do { d.setDate(d.getDate() + 1); } while (d.getDay() === 0 || d.getDay() === 6);
+    }
+    return d;
+  }
+  function monthKey() { const n = new Date(); return n.getFullYear() + '-' + pad(n.getMonth() + 1); }
+  function countUsage(provider, n) {
+    const u = store.get(K.usage, {}); const k = monthKey() + ':' + provider; u[k] = (u[k] || 0) + n; store.set(K.usage, u); renderUsage();
+  }
+  function renderUsage() {
+    const u = store.get(K.usage, {}); const g = u[monthKey() + ':google'] || 0; const t = u[monthKey() + ':tomtom'] || 0;
+    $('usageInfo').textContent = `Abfragen in diesem Monat von diesem Gerät: TomTom ${t} von 20.000 frei, Google ${g} von 5.000 frei. Die App stoppt automatisch bei ${LIMITS.tomtom.toLocaleString('de-DE')} (TomTom) bzw. ${LIMITS.google.toLocaleString('de-DE')} (Google).`;
+  }
+
+  // ---------- Datenquellen ----------
+  // Jede Quelle liefert für eine Abfahrtszeit { duration, noTraffic, distance } in Sekunden bzw. Metern.
+  const providers = {
+    demo: {
+      label: 'Demo', async travel(from, to, depart) {
+        // Simulierte Kurve: Grundzeit aus Adresslänge, Stoßzeiten um 7:45 und 17:00, leichtes Rauschen.
+        const base = 1500 + ((from.length * 37 + to.length * 53) % 900);
+        const h = depart.getHours() + depart.getMinutes() / 60;
+        const wk = depart.getDay() === 0 || depart.getDay() === 6 ? 0.3 : 1;
+        const peak = (c, w, a) => a * Math.exp(-((h - c) ** 2) / (2 * w * w));
+        const outbound = from < to;
+        const f = 1 + wk * (peak(7.75, 0.7, outbound ? 0.65 : 0.3) + peak(17.0, 0.9, outbound ? 0.3 : 0.6) + peak(12.5, 1.2, 0.08));
+        const noise = 1 + (Math.sin(depart.getTime() / 7e5) * 0.03);
+        await new Promise(r => setTimeout(r, 40));
+        return { duration: Math.round(base * f * noise), noTraffic: base, distance: 24000 };
+      }
+    },
+    google: {
+      label: 'Google Maps', async travel(from, to, depart, key) {
+        const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key,
+            'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters' },
+          body: JSON.stringify({
+            origin: { address: from }, destination: { address: to }, travelMode: 'DRIVE',
+            routingPreference: 'TRAFFIC_AWARE_OPTIMAL', trafficModel: 'BEST_GUESS',
+            departureTime: iso(depart), languageCode: 'de-DE', units: 'METRIC'
+          })
+        });
+        countUsage('google', 1);
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error('Google: ' + ((j.error && j.error.message) || res.status));
+        const r = j.routes && j.routes[0];
+        if (!r) throw new Error('Google: Keine Route gefunden. Bitte Adressen prüfen.');
+        return { duration: parseInt(r.duration, 10), noTraffic: parseInt(r.staticDuration, 10), distance: r.distanceMeters };
+      }
+    },
+    tomtom: {
+      label: 'TomTom', pending: {},
+      geocode(q, key) {
+        // Laufende Anfragen teilen, damit jede Adresse nur einmal abgefragt wird
+        if (!this.pending[q]) this.pending[q] = this.geocodeOnce(q, key).catch(e => { delete this.pending[q]; throw e; });
+        return this.pending[q];
+      },
+      async geocodeOnce(q, key) {
+        const geo = store.get(K.geo, {});
+        if (geo[q]) return geo[q];
+        const res = await fetch(`https://api.tomtom.com/search/2/geocode/${encodeURIComponent(q)}.json?limit=1&language=de-DE&key=${encodeURIComponent(key)}`);
+        countUsage('tomtom', 1);
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error('TomTom: ' + ((j.errorText || j.detailedError?.message) || res.status));
+        const p = j.results && j.results[0] && j.results[0].position;
+        if (!p) throw new Error('TomTom: Adresse nicht gefunden: ' + q);
+        geo[q] = p; store.set(K.geo, geo); return p;
+      },
+      async travel(from, to, depart, key) {
+        const a = await this.geocode(from, key), b = await this.geocode(to, key);
+        const url = `https://api.tomtom.com/routing/1/calculateRoute/${a.lat},${a.lon}:${b.lat},${b.lon}/json?traffic=true&routeType=fastest&travelMode=car&computeTravelTimeFor=all&departAt=${encodeURIComponent(iso(depart))}&key=${encodeURIComponent(key)}`;
+        const res = await fetch(url);
+        countUsage('tomtom', 1);
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error('TomTom: ' + ((j.error && j.error.description) || j.detailedError?.message || res.status));
+        const s = j.routes && j.routes[0] && j.routes[0].summary;
+        if (!s) throw new Error('TomTom: Keine Route gefunden.');
+        return { duration: s.travelTimeInSeconds, noTraffic: s.noTrafficTravelTimeInSeconds ?? s.historicTrafficTravelTimeInSeconds, distance: s.lengthInMeters };
+      }
+    }
+  };
+
+  // ---------- Berechnung ----------
+  async function pool(items, limit, fn) {
+    const out = new Array(items.length); let i = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (i < items.length) { const idx = i++; out[idx] = await fn(items[idx], idx); }
+    });
+    await Promise.all(workers); return out;
+  }
+
+  async function scan(from, to, times, onProgress) {
+    const prov = settings.provider; const P = providers[prov]; const key = (settings.keys || {})[prov] || '';
+    const cache = store.get(K.cache, {}); const now = Date.now(); let done = 0; let firstErr = null;
+    const results = await pool(times, 4, async (t) => {
+      if (t.getTime() < now + 60000) { done++; onProgress(done); return { t, skipped: true }; }
+      const ck = [prov, from, to, t.toISOString()].join('|');
+      const c = cache[ck];
+      if (c && now - c.at < CACHE_MS) { done++; onProgress(done); return { t, ...c.v }; }
+      if (LIMITS[prov] && usageOf(prov) >= LIMITS[prov]) { done++; onProgress(done); firstErr = firstErr || new Error('Monatliche Sicherheitsgrenze für ' + P.label + ' erreicht. Die App fragt bis Monatsende nichts mehr ab, damit keine Kosten entstehen.'); return { t, error: 'Limit' }; }
+      try {
+        const v = await P.travel(from, to, t, key);
+        cache[ck] = { at: Date.now(), v };
+        done++; onProgress(done); return { t, ...v };
+      } catch (e) { firstErr = firstErr || e; done++; onProgress(done); return { t, error: e.message }; }
+    });
+    for (const k of Object.keys(cache)) if (now - cache[k].at > CACHE_MS) delete cache[k];
+    store.set(K.cache, cache);
+    return { results, error: firstErr };
+  }
+
+  function render(prefix, title, results) {
+    $(prefix + 'Card').hidden = false;
+    $(prefix + 'Title').textContent = title;
+    const ok = results.filter(r => r.duration);
+    const bestEl = $(prefix + 'Best'), barsEl = $(prefix + 'Bars');
+    bestEl.replaceChildren(); barsEl.replaceChildren();
+    if (!ok.length) {
+      const p = document.createElement('p'); p.className = 'muted'; p.style.margin = '0';
+      p.textContent = results.every(r => r.skipped) ? 'Alle Abfahrtszeiten dieses Fensters liegen schon in der Vergangenheit. Wähle einen späteren Tag.' : 'Keine Ergebnisse.';
+      bestEl.append(p); $(prefix + 'Meta').textContent = ''; return;
+    }
+    const min = Math.min(...ok.map(r => r.duration)), max = Math.max(...ok.map(r => r.duration));
+    const sorted = [...ok].sort((a, b) => a.duration - b.duration || a.t - b.t);
+    const best = sorted[0];
+    $(prefix + 'Meta').textContent = `${(best.distance / 1000).toFixed(1)} km · ohne Verkehr ${fmtMin(best.noTraffic)}`;
+    // Top 3 mit mindestens 30 Minuten Abstand, damit die Vorschläge echte Alternativen sind
+    const picks = [];
+    for (const r of sorted) { if (picks.every(p => Math.abs(p.t - r.t) >= 30 * 60000)) picks.push(r); if (picks.length === 3) break; }
+    picks.forEach((r, i) => {
+      const d = document.createElement('div'); if (i === 0) d.className = 'top';
+      const lab = document.createElement('span'); lab.className = 'muted'; lab.textContent = i === 0 ? 'Beste Abfahrt' : (i + 1) + '. Alternative';
+      const t = document.createElement('span'); t.className = 't'; t.textContent = hm(r.t);
+      const info = document.createElement('span');
+      const arr = new Date(r.t.getTime() + r.duration * 1000);
+      info.textContent = `${fmtMin(r.duration)} Fahrt · an ${hm(arr)}`;
+      const delay = document.createElement('span'); delay.className = 'muted';
+      const dl = Math.max(0, Math.round((r.duration - r.noTraffic) / 60));
+      delay.textContent = dl ? `+${dl} min durch Verkehr` : 'kaum Verkehr';
+      d.append(lab, t, info, delay); bestEl.append(d);
+    });
+    const saving = Math.round((max - min) / 60);
+    if (saving > 0) {
+      const p = document.createElement('p'); p.className = 'muted'; p.style.margin = '0';
+      p.textContent = `Gegenüber der ungünstigsten Zeit im Fenster sparst du bis zu ${saving} min.`;
+      bestEl.append(p);
+    }
+    const lo = min * 0.85;
+    for (const r of results) {
+      const row = document.createElement('div'); row.className = 'bar';
+      const a = document.createElement('span'); a.textContent = hm(r.t);
+      const track = document.createElement('div'); track.className = 'track';
+      const fill = document.createElement('div'); fill.className = 'fill';
+      const v = document.createElement('span'); v.className = 'v';
+      if (r.duration) {
+        const w = max === lo ? 100 : 15 + 85 * (r.duration - lo) / (max - lo);
+        fill.style.width = w.toFixed(1) + '%';
+        if (r === best) row.classList.add('isbest');
+        else if (r.duration >= min * 1.25) row.classList.add('hi');
+        else if (r.duration >= min * 1.1) row.classList.add('midv');
+        v.textContent = fmtMin(r.duration);
+      } else { row.classList.add('skip'); v.textContent = r.skipped ? 'vorbei' : 'Fehler'; fill.style.width = '0'; }
+      track.append(fill); row.append(a, track, v); barsEl.append(row);
+    }
+  }
+
+  async function run() {
+    const route = routes.find(r => r.id === $('routeSelect').value); if (!route) return;
+    const prov = settings.provider;
+    if (prov !== 'demo' && !(settings.keys || {})[prov]) {
+      showErr('Für ' + providers[prov].label + ' fehlt noch der API-Schlüssel. Trage ihn unter „Einstellungen und Verkehrsdaten“ ein.');
+      $('settingsDetails').open = true; return;
+    }
+    showErr('');
+    const day = parseDay($('dayInput').value);
+    const step = Number(route.step) || 15;
+    const tOut = slots(day, route.morStart, route.morEnd, step);
+    const tBack = route.back ? slots(day, route.eveStart, route.eveEnd, step) : [];
+    const total = tOut.length + tBack.length; let done = 0;
+    const prog = () => { done++; $('runInfo').textContent = `Prüfe Abfahrtszeiten … ${done}/${total}`; };
+    $('runBtn').disabled = true; $('runInfo').textContent = `Prüfe Abfahrtszeiten … 0/${total}`;
+    try {
+      const a = await scan(route.from, route.to, tOut, prog);
+      render('out', 'Hinweg (morgens)', a.results);
+      let b = { results: [], error: null };
+      if (route.back) { b = await scan(route.to, route.from, tBack, prog); render('back', 'Rückweg (Feierabend)', b.results); }
+      else $('backCard').hidden = true;
+      const err = a.error || b.error; if (err) showErr(err.message);
+      const dayLabel = day.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
+      $('runInfo').textContent = `${dayLabel} · ${providers[prov].label} · Stand ${hm(new Date())}`;
+    } finally { $('runBtn').disabled = false; }
+  }
+  function showErr(msg) { $('runErr').hidden = !msg; $('runErr').textContent = msg; }
+
+  // ---------- Routen verwalten ----------
+  function renderRoutes() {
+    const sel = $('routeSelect'); const cur = sel.value || store.get(K.last, '');
+    sel.replaceChildren();
+    for (const r of routes) { const o = document.createElement('option'); o.value = r.id; o.textContent = r.name; sel.append(o); }
+    if (routes.some(r => r.id === cur)) sel.value = cur;
+    const list = $('routeList'); list.replaceChildren();
+    for (const r of routes) {
+      const item = document.createElement('div'); item.className = 'route-item';
+      const txt = document.createElement('div'); txt.style.minWidth = '0';
+      const n = document.createElement('div'); n.className = 'name'; n.textContent = r.name;
+      const s = document.createElement('div'); s.className = 'muted'; s.textContent = `${r.from} → ${r.to}`;
+      txt.append(n, s);
+      const btns = document.createElement('div'); btns.className = 'row';
+      const e = document.createElement('button'); e.type = 'button'; e.textContent = 'Bearbeiten'; e.onclick = () => editRoute(r);
+      const d = document.createElement('button'); d.type = 'button'; d.textContent = 'Löschen';
+      d.onclick = () => {
+        if (d.dataset.confirm) { routes = routes.filter(x => x.id !== r.id); store.set(K.routes, routes); renderRoutes(); }
+        else { d.dataset.confirm = '1'; d.textContent = 'Wirklich löschen?'; setTimeout(() => { delete d.dataset.confirm; d.textContent = 'Löschen'; }, 3000); }
+      };
+      if (routes.length === 1) d.disabled = true;
+      btns.append(e, d); item.append(txt, btns); list.append(item);
+    }
+  }
+  function editRoute(r) {
+    $('routeFormTitle').textContent = r ? 'Route bearbeiten' : 'Neue Route';
+    $('rId').value = r ? r.id : ''; $('rName').value = r ? r.name : ''; $('rFrom').value = r ? r.from : ''; $('rTo').value = r ? r.to : '';
+    $('rMorStart').value = r ? r.morStart : '06:00'; $('rMorEnd').value = r ? r.morEnd : '09:30';
+    $('rBack').checked = r ? r.back : true; $('rEveStart').value = r ? r.eveStart : '15:00'; $('rEveEnd').value = r ? r.eveEnd : '19:00';
+    $('rStep').value = String(r ? r.step : 15); $('rCancel').hidden = !r; if (r) $('routesDetails').open = true;
+    if (r) $('rName').focus();
+  }
+  $('routeForm').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const r = { id: $('rId').value || 'r' + Date.now(), name: $('rName').value.trim(), from: $('rFrom').value.trim(), to: $('rTo').value.trim(),
+      morStart: $('rMorStart').value, morEnd: $('rMorEnd').value, back: $('rBack').checked, eveStart: $('rEveStart').value, eveEnd: $('rEveEnd').value,
+      step: Number($('rStep').value) };
+    if (r.morStart > r.morEnd || (r.back && r.eveStart > r.eveEnd)) { alertInline('„Frühestens“ muss vor „spätestens“ liegen.'); return; }
+    const i = routes.findIndex(x => x.id === r.id); if (i >= 0) routes[i] = r; else routes.push(r);
+    store.set(K.routes, routes); store.set(K.last, r.id); renderRoutes(); $('routeSelect').value = r.id; editRoute(null);
+    $('dayInput').value = dateKey(defaultDay(r));
+  });
+  function alertInline(m) { showErr(m); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  $('rCancel').onclick = () => editRoute(null);
+  $('routeSelect').onchange = () => { store.set(K.last, $('routeSelect').value); };
+
+  // ---------- Einstellungen ----------
+  const hints = {
+    demo: 'Simulierte Verkehrskurve zum Ausprobieren. Die Zahlen sind nicht echt.',
+    google: 'Google Routes API. 5.000 Abfragen im Monat frei, danach 10 $ pro 1.000. Google verlangt dafür ein Rechnungskonto mit Kreditkarte. Der Schlüssel bleibt nur in diesem Browser.',
+    tomtom: 'TomTom Routing API mit Live-Verkehr und Prognose. 20.000 Abfragen im Monat frei, ohne Kreditkarte, also ohne Kostenrisiko. Der Schlüssel bleibt nur in diesem Browser.'
+  };
+  function renderSettings() {
+    $('sProvider').value = settings.provider;
+    const p = settings.provider; $('sKeyWrap').hidden = p === 'demo';
+    $('sKey').value = (settings.keys || {})[p] || ''; $('sKeyHint').textContent = hints[p];
+    const pill = $('modePill'); pill.textContent = p === 'demo' ? 'Demo-Daten' : providers[p].label; pill.className = 'pill' + (p === 'demo' ? ' demo' : '');
+  }
+  $('sProvider').onchange = () => { const p = $('sProvider').value; $('sKeyWrap').hidden = p === 'demo'; $('sKey').value = (settings.keys || {})[p] || ''; $('sKeyHint').textContent = hints[p]; };
+  $('sSave').onclick = () => {
+    const p = $('sProvider').value; settings.provider = p; settings.keys = settings.keys || {};
+    if (p !== 'demo') settings.keys[p] = $('sKey').value.trim();
+    store.set(K.settings, settings); renderSettings(); $('sSave').textContent = 'Gespeichert'; setTimeout(() => $('sSave').textContent = 'Einstellungen speichern', 1500);
+  };
+  $('sClearCache').onclick = () => { store.set(K.cache, {}); store.set(K.geo, {}); providers.tomtom.pending = {}; $('sClearCache').textContent = 'Geleert'; setTimeout(() => $('sClearCache').textContent = 'Zwischenspeicher leeren', 1500); };
+
+  $('runBtn').onclick = run;
+
+  renderRoutes(); renderSettings(); renderUsage(); editRoute(null);
+  const r0 = routes.find(r => r.id === $('routeSelect').value);
+  $('dayInput').value = dateKey(defaultDay(r0));
+  $('routeSelect').addEventListener('change', () => { const r = routes.find(x => x.id === $('routeSelect').value); $('dayInput').value = dateKey(defaultDay(r)); });
+  if (settings.provider === 'demo') run();
+})();
+</script>
+</body>
+</html>
