@@ -7,6 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#1f6f5c">
 <title>Abfahrtszeit</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
 /* Layout: eine schmale Spalte, oben Route und Tag, darunter je ein Block für Hinweg und Rückweg */
 :root {
@@ -61,6 +62,13 @@ details summary { cursor: pointer; font-weight: 600; }
 .route-item .name { font-weight: 600; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 @media (max-width: 480px) { .split { grid-template-columns: 1fr; } }
+.map { height: 260px; border-radius: 8px; border: 1px solid var(--line); overflow: hidden; z-index: 0; }
+.map-empty { display: grid; place-items: center; color: var(--muted); font-size: .85rem; background: var(--bg); }
+.maplinks a { color: var(--accent); font-size: .9rem; }
+.incidents { display: grid; gap: 4px; font-size: .9rem; }
+.incidents .inc { display: flex; gap: 8px; align-items: baseline; }
+.inc .tag { font-size: .75rem; padding: 1px 8px; border-radius: 99px; color: #fff; white-space: nowrap; }
+.tag.ROAD_CLOSURE { background: #8b1e1e; } .tag.ROAD_WORK { background: #b5651d; } .tag.JAM { background: var(--bad); } .tag.OTHER { background: var(--muted); }
 </style>
 </head>
 <body>
@@ -92,6 +100,9 @@ details summary { cursor: pointer; font-weight: 600; }
       <span class="muted" id="outMeta"></span>
     </div>
     <div class="best" id="outBest"></div>
+    <div class="incidents" id="outInc"></div>
+    <div class="map" id="outMap"></div>
+    <div class="row maplinks" id="outLinks"></div>
     <div class="bars" id="outBars"></div>
   </section>
 
@@ -101,6 +112,9 @@ details summary { cursor: pointer; font-weight: 600; }
       <span class="muted" id="backMeta"></span>
     </div>
     <div class="best" id="backBest"></div>
+    <div class="incidents" id="backInc"></div>
+    <div class="map" id="backMap"></div>
+    <div class="row maplinks" id="backLinks"></div>
     <div class="bars" id="backBars"></div>
   </section>
 
@@ -168,6 +182,7 @@ details summary { cursor: pointer; font-weight: 600; }
   <p class="muted" style="margin:0">Die Zeiten für die Zukunft sind Prognosen der Datenquelle aus aktuellem und historischem Verkehr. Je näher die Abfahrt, desto genauer. Ergebnisse werden 30 Minuten zwischengespeichert, um Abfragen zu sparen.</p>
 </main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 (() => {
   'use strict';
@@ -193,6 +208,26 @@ details summary { cursor: pointer; font-weight: 600; }
   const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
   const LIMITS = { tomtom: 19000, google: 4800 }; // Sicherheitsgrenze knapp unter dem Gratiskontingent
   function usageOf(p) { return store.get(K.usage, {})[monthKey() + ':' + p] || 0; }
+  // Streckenpunkte ausdünnen, damit der Zwischenspeicher klein bleibt
+  function thin(pts, max = 250) {
+    if (!pts || pts.length <= max) return pts || null;
+    const step = (pts.length - 1) / (max - 1); const out = [];
+    for (let i = 0; i < max; i++) { const q = pts[Math.round(i * step)]; out.push([+q[0].toFixed(5), +q[1].toFixed(5)]); }
+    return out;
+  }
+  function decodePolyline(str) {
+    let i = 0, lat = 0, lng = 0; const out = [];
+    while (i < str.length) {
+      for (const k of [0, 1]) {
+        let b, shift = 0, res = 0;
+        do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        const d = (res & 1) ? ~(res >> 1) : (res >> 1);
+        if (k === 0) lat += d; else lng += d;
+      }
+      out.push([lat / 1e5, lng / 1e5]);
+    }
+    return out;
+  }
   const fmtMin = (s) => Math.round(s / 60) + ' min';
   const dateKey = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
   function parseDay(str) { const [y, m, d] = str.split('-').map(Number); return new Date(y, m - 1, d); }
@@ -233,7 +268,10 @@ details summary { cursor: pointer; font-weight: 600; }
         const f = 1 + wk * (peak(7.75, 0.7, outbound ? 0.65 : 0.3) + peak(17.0, 0.9, outbound ? 0.3 : 0.6) + peak(12.5, 1.2, 0.08));
         const noise = 1 + (Math.sin(depart.getTime() / 7e5) * 0.03);
         await new Promise(r => setTimeout(r, 40));
-        return { duration: Math.round(base * f * noise), noTraffic: base, distance: 24000 };
+        let A = [48.1374, 11.5755], B = [48.2492, 11.6510]; if (!outbound) [A, B] = [B, A];
+        const pts = Array.from({ length: 40 }, (_, i) => { const u = i / 39; return [A[0] + (B[0] - A[0]) * u + Math.sin(u * Math.PI) * 0.01, A[1] + (B[1] - A[1]) * u - Math.sin(u * Math.PI * 2) * 0.012]; });
+        const incidents = f > 1.3 ? [{ cat: 'JAM', delay: Math.round(base * (f - 1) * 0.6), lat: pts[12][0], lon: pts[12][1] }, { cat: 'ROAD_WORK', delay: 120, lat: pts[28][0], lon: pts[28][1] }] : [];
+        return { duration: Math.round(base * f * noise), noTraffic: base, distance: 24000, points: pts, incidents };
       }
     },
     google: {
@@ -241,7 +279,7 @@ details summary { cursor: pointer; font-weight: 600; }
         const res = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key,
-            'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters' },
+            'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters,routes.polyline.encodedPolyline' },
           body: JSON.stringify({
             origin: { address: from }, destination: { address: to }, travelMode: 'DRIVE',
             routingPreference: 'TRAFFIC_AWARE_OPTIMAL', trafficModel: 'BEST_GUESS',
@@ -253,7 +291,8 @@ details summary { cursor: pointer; font-weight: 600; }
         if (!res.ok) throw new Error('Google: ' + ((j.error && j.error.message) || res.status));
         const r = j.routes && j.routes[0];
         if (!r) throw new Error('Google: Keine Route gefunden. Bitte Adressen prüfen.');
-        return { duration: parseInt(r.duration, 10), noTraffic: parseInt(r.staticDuration, 10), distance: r.distanceMeters };
+        return { duration: parseInt(r.duration, 10), noTraffic: parseInt(r.staticDuration, 10), distance: r.distanceMeters,
+          points: thin(r.polyline && r.polyline.encodedPolyline ? decodePolyline(r.polyline.encodedPolyline) : null) };
       }
     },
     tomtom: {
@@ -276,14 +315,21 @@ details summary { cursor: pointer; font-weight: 600; }
       },
       async travel(from, to, depart, key) {
         const a = await this.geocode(from, key), b = await this.geocode(to, key);
-        const url = `https://api.tomtom.com/routing/1/calculateRoute/${a.lat},${a.lon}:${b.lat},${b.lon}/json?traffic=true&routeType=fastest&travelMode=car&computeTravelTimeFor=all&departAt=${encodeURIComponent(iso(depart))}&key=${encodeURIComponent(key)}`;
+        const url = `https://api.tomtom.com/routing/1/calculateRoute/${a.lat},${a.lon}:${b.lat},${b.lon}/json?traffic=true&routeType=fastest&travelMode=car&computeTravelTimeFor=all&sectionType=traffic&departAt=${encodeURIComponent(iso(depart))}&key=${encodeURIComponent(key)}`;
         const res = await fetch(url);
         countUsage('tomtom', 1);
         const j = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error('TomTom: ' + ((j.error && j.error.description) || j.detailedError?.message || res.status));
         const s = j.routes && j.routes[0] && j.routes[0].summary;
         if (!s) throw new Error('TomTom: Keine Route gefunden.');
-        return { duration: s.travelTimeInSeconds, noTraffic: s.noTrafficTravelTimeInSeconds ?? s.historicTrafficTravelTimeInSeconds, distance: s.lengthInMeters };
+        const legs = j.routes[0].legs || [];
+        const pts = legs.flatMap(l => (l.points || []).map(p => [p.latitude, p.longitude]));
+        // Verkehrsmeldungen auf der Strecke (Stau, Baustelle, Sperrung); die Route ist bereits um Sperrungen herum geplant
+        const incidents = (j.routes[0].sections || []).filter(x => x.sectionType === 'TRAFFIC').map(x => {
+          const at = pts[x.startPointIndex] || pts[0];
+          return { cat: x.simpleCategory || 'OTHER', delay: x.delayInSeconds || 0, lat: at ? at[0] : null, lon: at ? at[1] : null };
+        });
+        return { incidents, duration: s.travelTimeInSeconds, noTraffic: s.noTrafficTravelTimeInSeconds ?? s.historicTrafficTravelTimeInSeconds, distance: s.lengthInMeters, points: thin(pts) };
       }
     }
   };
@@ -317,7 +363,7 @@ details summary { cursor: pointer; font-weight: 600; }
     return { results, error: firstErr };
   }
 
-  function render(prefix, title, results) {
+  function render(prefix, title, results, from, to) {
     $(prefix + 'Card').hidden = false;
     $(prefix + 'Title').textContent = title;
     const ok = results.filter(r => r.duration);
@@ -326,12 +372,14 @@ details summary { cursor: pointer; font-weight: 600; }
     if (!ok.length) {
       const p = document.createElement('p'); p.className = 'muted'; p.style.margin = '0';
       p.textContent = results.every(r => r.skipped) ? 'Alle Abfahrtszeiten dieses Fensters liegen schon in der Vergangenheit. Wähle einen späteren Tag.' : 'Keine Ergebnisse.';
-      bestEl.append(p); $(prefix + 'Meta').textContent = ''; return;
+      bestEl.append(p); $(prefix + 'Meta').textContent = ''; drawMap(prefix, null, from, to); renderIncidents(prefix, null); return;
     }
     const min = Math.min(...ok.map(r => r.duration)), max = Math.max(...ok.map(r => r.duration));
     const sorted = [...ok].sort((a, b) => a.duration - b.duration || a.t - b.t);
     const best = sorted[0];
     $(prefix + 'Meta').textContent = `${(best.distance / 1000).toFixed(1)} km · ohne Verkehr ${fmtMin(best.noTraffic)}`;
+    drawMap(prefix, best.points, from, to, hm(best.t), best.incidents);
+    renderIncidents(prefix, best);
     // Top 3 mit mindestens 30 Minuten Abstand, damit die Vorschläge echte Alternativen sind
     const picks = [];
     for (const r of sorted) { if (picks.every(p => Math.abs(p.t - r.t) >= 30 * 60000)) picks.push(r); if (picks.length === 3) break; }
@@ -372,6 +420,54 @@ details summary { cursor: pointer; font-weight: 600; }
     }
   }
 
+  // ---------- Verkehrsmeldungen ----------
+  const CAT = { ROAD_CLOSURE: 'Sperrung', ROAD_WORK: 'Baustelle', JAM: 'Stau', OTHER: 'Störung' };
+  function renderIncidents(prefix, best) {
+    const el = $(prefix + 'Inc'); el.replaceChildren();
+    if (!best) return;
+    const head = document.createElement('div'); head.className = 'muted';
+    if (!best.incidents) { head.textContent = settings.provider === 'google' ? 'Google plant Sperrungen und Staus automatisch ein, listet sie aber nicht einzeln auf.' : ''; el.append(head); return; }
+    if (!best.incidents.length) { head.textContent = `Zur Abfahrt um ${hm(best.t)}: keine Sperrungen, Baustellen oder Staus auf der Strecke gemeldet.`; el.append(head); return; }
+    head.textContent = `Auf der Strecke zur Abfahrt um ${hm(best.t)} (Umleitungen um Sperrungen sind schon eingerechnet):`;
+    el.append(head);
+    for (const i of best.incidents) {
+      const row = document.createElement('div'); row.className = 'inc';
+      const tag = document.createElement('span'); tag.className = 'tag ' + (CAT[i.cat] ? i.cat : 'OTHER'); tag.textContent = CAT[i.cat] || CAT.OTHER;
+      const t = document.createElement('span'); t.textContent = i.cat === 'ROAD_CLOSURE' && i.delay < 60 ? 'wird umfahren' : i.delay >= 60 ? `+${Math.round(i.delay / 60)} min Verzögerung` : 'kaum Verzögerung';
+      row.append(tag, t); el.append(row);
+    }
+  }
+
+  // ---------- Routenansicht ----------
+  const maps = {};
+  function drawMap(prefix, points, from, to, timeLabel, incidents) {
+    const el = $(prefix + 'Map');
+    const links = $(prefix + 'Links'); links.replaceChildren();
+    const mk = (href, text) => { const a = document.createElement('a'); a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = text; return a; };
+    links.append(
+      mk('https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + encodeURIComponent(from) + '&destination=' + encodeURIComponent(to), 'In Google Maps öffnen'),
+      mk('https://maps.apple.com/?dirflg=d&saddr=' + encodeURIComponent(from) + '&daddr=' + encodeURIComponent(to), 'In Apple Karten öffnen'));
+    if (!window.L || !points || points.length < 2) {
+      if (maps[prefix]) { maps[prefix].map.remove(); delete maps[prefix]; }
+      el.className = 'map map-empty'; el.textContent = window.L ? 'Strecke nicht verfügbar. Bitte neu berechnen.' : 'Karte konnte nicht geladen werden.';
+      return;
+    }
+    if (!maps[prefix]) {
+      el.className = 'map'; el.textContent = '';
+      const map = L.map(el, { scrollWheelZoom: false, attributionControl: true });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(map);
+      maps[prefix] = { map, layer: L.layerGroup().addTo(map) };
+    }
+    const { map, layer } = maps[prefix]; layer.clearLayers();
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#1f6f5c';
+    const line = L.polyline(points, { color: accent, weight: 5, opacity: .9 }).addTo(layer);
+    L.circleMarker(points[0], { radius: 7, color: '#fff', weight: 2, fillColor: accent, fillOpacity: 1 }).bindTooltip('Start' + (timeLabel ? ' ' + timeLabel : '')).addTo(layer);
+    L.circleMarker(points[points.length - 1], { radius: 7, color: '#fff', weight: 2, fillColor: '#c4553d', fillOpacity: 1 }).bindTooltip('Ziel').addTo(layer);
+    const icol = { ROAD_CLOSURE: '#8b1e1e', ROAD_WORK: '#b5651d', JAM: '#c4553d', OTHER: '#777' };
+    for (const i of incidents || []) if (i.lat != null) L.circleMarker([i.lat, i.lon], { radius: 6, color: '#fff', weight: 2, fillColor: icol[i.cat] || icol.OTHER, fillOpacity: 1 }).bindTooltip(CAT[i.cat] || CAT.OTHER).addTo(layer);
+    map.invalidateSize(); map.fitBounds(line.getBounds(), { padding: [20, 20] });
+  }
+
   async function run() {
     const route = routes.find(r => r.id === $('routeSelect').value); if (!route) return;
     const prov = settings.provider;
@@ -389,9 +485,9 @@ details summary { cursor: pointer; font-weight: 600; }
     $('runBtn').disabled = true; $('runInfo').textContent = `Prüfe Abfahrtszeiten … 0/${total}`;
     try {
       const a = await scan(route.from, route.to, tOut, prog);
-      render('out', 'Hinweg (morgens)', a.results);
+      render('out', 'Hinweg (morgens)', a.results, route.from, route.to);
       let b = { results: [], error: null };
-      if (route.back) { b = await scan(route.to, route.from, tBack, prog); render('back', 'Rückweg (Feierabend)', b.results); }
+      if (route.back) { b = await scan(route.to, route.from, tBack, prog); render('back', 'Rückweg (Feierabend)', b.results, route.to, route.from); }
       else $('backCard').hidden = true;
       const err = a.error || b.error; if (err) showErr(err.message);
       const dayLabel = day.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
